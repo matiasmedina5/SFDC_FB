@@ -1,0 +1,24 @@
+<apex:page controller="FacebookDashboardController" action="{!init}">
+<!-- Begin Default Content REMOVE THIS -->
+<h1>Congratulations</h1>
+This is your App Dashboard Page
+<!-- End Default Content REMOVE THIS -->
+  <apex:form >
+      <!-- Define the JavaScript function sayHello-->
+      <apex:actionFunction action="{!getFriends}" name="getFriends" reRender="friendList" />
+  </apex:form>
+  
+  <apex:outputPanel onclick="getFriends()" styleClass="btn">
+        Click Me
+  </apex:outputPanel>
+    
+    <apex:outputPanel id="friendList">
+        <apex:repeat value="{!friends}" var="string">
+
+            <apex:outputText value="{!string}" id="theValue"/><br/>
+
+        </apex:repeat>
+    </apex:outputPanel>
+
+  
+</apex:page>
