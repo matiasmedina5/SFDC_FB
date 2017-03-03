@@ -1,156 +1,116 @@
 public with sharing class FacebookDashboardController {
     private String userAccessToken;
-    private static String CODE_ERROR_MSG = 'This authorization code has been used.';
-    private static String OAUTH_EXCEPTION = 'OAuthException';
+    
     public List<Friend> friends {get; set;}
     
     public FacebookDashboardController() {
-        System.debug('###controller');
+
     }
     
     public PageReference init() {
-        System.debug('###init');
+
         // Get client code from the Facebook Url
         String clientCode = ApexPages.currentPage().getParameters().get('code');
+        PageReference pageRef;
+        HttpResponse res;
+        
         try {
-            HttpResponse res;
-            
-            // Make this request to get the app access token in order to make another request to validate the user token
-            String url = 'https://graph.facebook.com/v2.8/oauth/access_token?client_id=761699053909445&redirect_uri=https://sftrainingexam-dev-ed--c.na30.visual.force.com/apex/FacebookDashboardApp&client_secret=8038ee52d83634eeda36b5f2b93fda1d&code=' + clientCode;
-            Http h = new Http();
-        
-            // Instantiate a new HTTP request, specify the method (GET) as well as the endpoint
-            HttpRequest req = new HttpRequest();
-            req.setEndpoint(url);
-            req.setMethod('GET');
-        
-            // Send the request, and return a response
-            res = h.send(req);
+            // Get the user access token. It allows you get a lot of information from Facebook (eg: list of friends).
+            res = makeRequest(FacebookConstants.USER_ACCESS_TOKEN_URI + clientCode, 'GET');
+            // The user access token.
             String token = parseResponse(res.getBody(), 'access_token');
-            System.debug(token);
+            // If code expired or some other issue, try to get a new user token.
             if (String.isBlank(token)) {
-                if (String.isNotBlank(parseResponse(res.getBody(), 'error')) 
-                        && String.isNotBlank(parseResponse(res.getBody(), 'message'))
-                        && parseResponse(res.getBody(), 'message') ==  CODE_ERROR_MSG) {
-                        //&& String.isNotBlank(parseResponse(res.getBody(), 'type')) 
-                        //&& parseResponse(res.getBody(), 'type') == OAUTH_EXCEPTION) {
-                    System.debug('reload again');
-                    return new PageReference('https://www.facebook.com/v2.8/dialog/oauth?client_id=761699053909445&redirect_uri=https://sftrainingexam-dev-ed--c.na30.visual.force.com/apex/FacebookDashboardApp&response_type=code&scope=email,user_friends');
+                pageRef = new PageReference(FacebookConstants.APP_CODE_URI);
+                pageRef.setRedirect(true);
+            } else {
+                // Get application access token in order to validate the user token.
+                String appAccessToken = getAppAccessToken(makeRequest(FacebookConstants.APP_ACCESS_TOKEN_URI, 'GET'));
+                // Check if the user token is valid.
+                res = makeRequest(String.format(FacebookConstants.VALIDATE_USER_TOKEN_URI, 
+                        new String [] {token, appAccessToken}), 'GET');
+                if (validateUserToken(res)) {
+                    userAccessToken = token;
                 }
             }
-            
-            //-----------------------------------------------
-            
-            // Get application access token
-            String appAccessToken = getAppAccessToken();
-            //-----------------------------------------------
-            String str = validateUserToken(token, appAccessToken);
-            System.debug(str);
-            if (parseResponse(str, 'is_valid') == 'true') {
-                userAccessToken = token;
-            }
-            
             
         } catch(System.CalloutException e) {
             System.debug(e.getStackTraceString());
         }
         
-        return null;
-        
+        return pageRef;
     }
     
     private String parseResponse(String body, String field) {
-        String accessToken;
-        // Parse JSON response to get all the totalPrice field values.
+        String result;
         JSONParser parser = JSON.createParser(body);
         while (parser.nextToken() != null) {
             if ((parser.getCurrentToken() == JSONToken.FIELD_NAME) && (parser.getText() == field)) {
-                // Get the value.
                 parser.nextToken();
-                // Compute the grand total price for all invoices.
-                accessToken = parser.getText();
+                result = parser.getText();
                 break;
             }
         }
-        return accessToken;
+        return result;
     }
     
-    private String getAppAccessToken() {
-        HttpResponse resValidToken;
-            
-        // Make this request to get the app access token in order to make another request to validate the user token
-        String urlValidateToken = 'https://graph.facebook.com/oauth/access_token?client_id=761699053909445&client_secret=8038ee52d83634eeda36b5f2b93fda1d&grant_type=client_credentials';
-        Http httpValidToken = new Http();
-    
-        // Instantiate a new HTTP request, specify the method (GET) as well as the endpoint
-        HttpRequest reqValidToken = new HttpRequest();
-        reqValidToken.setEndpoint(urlValidateToken);
-        reqValidToken.setMethod('GET');
-    
-        // Send the request, and return a response
-        resValidToken = httpValidToken.send(reqValidToken);
-        Integer equalIndex = resValidToken.getBody().indexOf('|');
-        String lastPartToken = resValidToken.getBody().substring(29, resValidToken.getBody().length());
+    private String getAppAccessToken(HttpResponse response) {
+        Integer equalIndex = response.getBody().indexOf('|');
+        String lastPartToken = response.getBody().substring(29, response.getBody().length());
         
-        return '761699053909445|' + lastPartToken;
-        //return resValidToken.getBody();
+        return FacebookConstants.CLIENT_ID + '|' + lastPartToken;
     }
     
-    private String validateUserToken(String tokenToInspect, String appToken) {
-        HttpResponse resValidToken;
-            
-        // Make this request to get the app access token in order to make another request to validate the user token
-        String urlValidateToken = 'https://graph.facebook.com/debug_token?input_token=' + tokenToInspect + '&access_token=' + appToken;
-        System.debug(urlValidateToken);
-        Http httpValidToken = new Http();
-    
-        // Instantiate a new HTTP request, specify the method (GET) as well as the endpoint
-        HttpRequest reqValidToken = new HttpRequest();
-        reqValidToken.setEndpoint(urlValidateToken);
-        reqValidToken.setMethod('GET');
-    
-        // Send the request, and return a response
-        resValidToken = httpValidToken.send(reqValidToken);
-        return resValidToken.getBody();
+    private Boolean validateUserToken(HttpResponse response) {
+        Boolean result = false;
+        if (parseResponse(response.getBody(), 'is_valid') == 'true') {
+            result = true;
+        }
+        return result;
     }
     
     public void getFriends() {
         HttpResponse response;
-        List<Friend> myFriends = new List<Friend>();
+        List<Friend> friendsWithTheApp = new List<Friend>();
             
-        // Make this request to get the app access token in order to make another request to validate the user token
         if (String.isNotBlank(userAccessToken)) {
             String url = 'https://graph.facebook.com/v2.8/me/friends?access_token=' + userAccessToken;
-            Http http = new Http();
-    
-            // Instantiate a new HTTP request, specify the method (GET) as well as the endpoint
-            HttpRequest req = new HttpRequest();
-            req.setEndpoint(url);
-            req.setMethod('GET');
-    
-            // Send the request, and return a response
-            response = http.send(req);
-            
+            response = makeRequest(url, 'GET');
             // Parse the 'data' array from the friend list that facebook retrieves
             JSONParser parser = JSON.createParser(response.getBody());
             while (parser.nextToken() != null) {
                 if ((parser.getCurrentToken() == JSONToken.START_ARRAY)) {
-                    // Get the value.
                     while (parser.nextToken()!= null) {
                         if (parser.getCurrentToken() == JSONToken.START_OBJECT) {
-                            myFriends.add((Friend)parser.readValueAs(Friend.class));
+                            friendsWithTheApp.add((Friend)parser.readValueAs(Friend.class));
                         }
                     }
-                    
                 }
             }
+            if (!friendsWithTheApp.isEmpty()) {
+                friends = friendsWithTheApp;
+            }
         }
+    }
+    
+    private HttpResponse makeRequest(String url, String method) {
+        // Instantiate a new http object
+        HttpResponse res;
+        Http h = new Http();
+        // Instantiate a new HTTP request, specify the method as well as the endpoint
+        HttpRequest req = new HttpRequest();
         
-        if (!myFriends.isEmpty()) {
-            friends = myFriends;
-            System.debug('###friends:' + friends);
+        try {
+            req.setEndpoint(url);
+            req.setMethod(method);
+            
+            // Send the request, and return a response
+            res = h.send(req);
+            
+        } catch(System.CalloutException e) {
+            System.debug(e.getStackTraceString());
         }
-
+        return res;
     }
     
     public class Friend {
